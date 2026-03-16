@@ -1,3 +1,4 @@
+LICENSE
 README.md
 pyproject.toml
 agent_actions/__init__.py
@@ -10,6 +11,7 @@ agent_actions/idempotency.py
 agent_actions/mcp.py
 agent_actions/models.py
 agent_actions/policies.py
+agent_actions/py.typed
 agent_actions/redaction.py
 agent_actions/registry.py
 agent_actions/runtime.py
