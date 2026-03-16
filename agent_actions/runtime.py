@@ -31,7 +31,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ValidationError
 
-from agent_actions.approvals import ApprovalAlreadyResolved, ApprovalNotFound, ApprovalService
+from agent_actions.approvals import ApprovalNotFound, ApprovalService
 from agent_actions.audit import AuditLogger
 from agent_actions.context import ContextResolver, RequestContext
 from agent_actions.idempotency import IdempotencyService

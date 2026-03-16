@@ -76,7 +76,13 @@ class ApprovalService:
             session.expunge(approval)
             return approval
 
-    def list(self, *, status: str | None = None, limit: int = 100, offset: int = 0) -> list[Approval]:
+    def list(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Approval]:
         with get_session(self._session_factory) as session:
             q = session.query(Approval)
             if status:
@@ -107,7 +113,12 @@ class ApprovalService:
         try:
             result = execute_fn()
         except Exception:
-            self._set_status(approval_id, from_status="executing", to_status="pending", approver_id=None)
+            self._set_status(
+                approval_id,
+                from_status="executing",
+                to_status="pending",
+                approver_id=None,
+            )
             raise
 
         with get_session(self._session_factory) as session:

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from agent_actions.context import RequestContext
 from agent_actions.decorators import action
 from agent_actions.policies import (
@@ -84,7 +82,13 @@ class TestRiskBasedPolicy:
         assert policy.evaluate(make_action(risk="high"), make_ctx()) == Decision.REQUIRE_APPROVAL
 
     def test_custom_risk_map(self):
-        policy = RiskBasedPolicy(risk_map={"low": Decision.DENY, "medium": Decision.DENY, "high": Decision.DENY})
+        policy = RiskBasedPolicy(
+            risk_map={
+                "low": Decision.DENY,
+                "medium": Decision.DENY,
+                "high": Decision.DENY,
+            }
+        )
         assert policy.evaluate(make_action(risk="low"), make_ctx()) == Decision.DENY
 
 

@@ -34,7 +34,7 @@ from pydantic import BaseModel
 
 from agent_actions.approvals import ApprovalAlreadyResolved, ApprovalNotFound, ApprovalService
 from agent_actions.audit import AuditLogger
-from agent_actions.context import ContextResolver, RequestContext
+from agent_actions.context import ContextResolver
 from agent_actions.db import resolve_session_factory
 from agent_actions.idempotency import IdempotencyService
 from agent_actions.mcp import build_mcp_server
@@ -42,7 +42,6 @@ from agent_actions.models import Approval, AuditLog
 from agent_actions.policies import DefaultPolicy, PolicyEngine, PolicyRule
 from agent_actions.registry import ActionDef, ActionRegistry
 from agent_actions.runtime import ActionRuntime, InvokeResult
-
 
 # ---------------------------------------------------------------------------
 # Request / response schemas for HTTP endpoints
@@ -244,7 +243,11 @@ class AgentActionApp:
             items = approval_service.list(status=status, limit=limit, offset=offset)
             return [ApprovalResponse.from_orm(a) for a in items]
 
-        @api.post("/approvals/{approval_id}/approve", response_model=InvokeResult, tags=["approvals"])
+        @api.post(
+            "/approvals/{approval_id}/approve",
+            response_model=InvokeResult,
+            tags=["approvals"],
+        )
         def approve_action(approval_id: str, request: Request):
             # Extract approver identity from the request context.
             approver_ctx = context_resolver.resolve(dict(request.headers))
@@ -259,7 +262,11 @@ class AgentActionApp:
                 raise HTTPException(status_code=500, detail="Approval execution failed.")
             return result
 
-        @api.post("/approvals/{approval_id}/reject", response_model=InvokeResult, tags=["approvals"])
+        @api.post(
+            "/approvals/{approval_id}/reject",
+            response_model=InvokeResult,
+            tags=["approvals"],
+        )
         def reject_action(approval_id: str, request: Request):
             approver_ctx = context_resolver.resolve(dict(request.headers))
             approver_id = approver_ctx.actor_id

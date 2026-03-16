@@ -175,7 +175,10 @@ class TestApprovalWorkflow:
             result_2 = future_2.result()
 
         outcomes = sorted(
-            ["already_resolved" if item == "already_resolved" else item.status for item in [result_1, result_2]]
+            [
+                "already_resolved" if item == "already_resolved" else item.status
+                for item in [result_1, result_2]
+            ]
         )
         assert outcomes == ["already_resolved", "success"]
         assert call_count["n"] == 1
@@ -237,7 +240,6 @@ class TestApprovalWorkflow:
 class TestApprovalHTTPEndpoints:
     def test_full_approval_flow_via_http(self, app_client):
         from agent_actions import action as action_decorator
-        from agent_actions.context import RequestContext
 
         app, client = app_client
 

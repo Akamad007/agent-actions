@@ -21,7 +21,8 @@ Try it:
          -H "X-Actor-Id: warehouse-bot" \
          -H "X-Roles: ops,inventory,scope:inventory" \
          -H "X-Tenant-Id: west-coast" \
-         -d '{"inputs": {"sku": "SKU-100", "quantity": 3, "order_id": "ORD-99"}, "idempotency_key": "reserve-ORD-99"}' | jq
+         -d '{"inputs": {"sku": "SKU-100", "quantity": 3,\
+ "order_id": "ORD-99"}, "idempotency_key": "reserve-ORD-99"}' | jq
 
     curl -s -X POST http://localhost:8000/actions/adjust_inventory/execute \
          -H "Content-Type: application/json" \

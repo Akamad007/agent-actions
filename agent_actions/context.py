@@ -22,7 +22,6 @@ from typing import Protocol, runtime_checkable
 
 from agent_actions.redaction import redact_headers
 
-
 # ---------------------------------------------------------------------------
 # AuthBackend — plug-in interface for credential validation
 # ---------------------------------------------------------------------------

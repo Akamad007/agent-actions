@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from threading import RLock
 from dataclasses import dataclass, field
+from threading import RLock
 from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from pydantic import BaseModel

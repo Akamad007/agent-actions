@@ -10,6 +10,7 @@ agent_actions/idempotency.py
 agent_actions/mcp.py
 agent_actions/models.py
 agent_actions/policies.py
+agent_actions/redaction.py
 agent_actions/registry.py
 agent_actions/runtime.py
 agent_actions/server.py
@@ -19,6 +20,7 @@ agent_actions.egg-info/dependency_links.txt
 agent_actions.egg-info/requires.txt
 agent_actions.egg-info/top_level.txt
 tests/test_approval.py
+tests/test_concurrency.py
 tests/test_idempotency.py
 tests/test_policy.py
 tests/test_registry.py

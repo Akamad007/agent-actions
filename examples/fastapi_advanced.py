@@ -35,10 +35,9 @@ from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
 
 from agent_actions import AgentActionApp, RequestContext, action
-from agent_actions.policies import RoleBasedPolicy, RiskBasedPolicy
+from agent_actions.policies import RiskBasedPolicy, RoleBasedPolicy
 from agent_actions.runtime import InvokeResult
 
 # ---------------------------------------------------------------------------
@@ -202,7 +201,11 @@ def execute_tenant_action(
         result = tenant_app.runtime.invoke(
             action_name=action_name,
             raw_inputs=body.get("inputs", {}),
-            headers={"x-actor-id": ctx.actor_id, "x-roles": ",".join(ctx.roles), "x-tenant-id": tenant_id},
+            headers={
+                "x-actor-id": ctx.actor_id,
+                "x-roles": ",".join(ctx.roles),
+                "x-tenant-id": tenant_id,
+            },
             idempotency_key=body.get("idempotency_key"),
         )
     except KeyError as exc:

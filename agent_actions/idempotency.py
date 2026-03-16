@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import delete
 from sqlalchemy.exc import IntegrityError

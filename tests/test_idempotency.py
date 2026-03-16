@@ -5,8 +5,6 @@ from __future__ import annotations
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-import pytest
-
 from agent_actions.decorators import action
 from agent_actions.policies import DefaultPolicy, PolicyEngine
 from agent_actions.runtime import ActionRuntime

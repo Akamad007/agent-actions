@@ -30,7 +30,8 @@ Try it:
     curl -s -X POST http://localhost:8000/actions/issue_refund/execute \
          -H "Content-Type: application/json" \
          -H "X-Actor-Id: alice" \
-         -d '{"inputs": {"invoice_id": "INV-001", "amount": 49.99}, "idempotency_key": "refund-INV-001"}' | jq
+         -d '{"inputs": {"invoice_id": "INV-001", "amount": 49.99},\
+ "idempotency_key": "refund-INV-001"}' | jq
 """
 
 from agent_actions import AgentActionApp, RequestContext, action

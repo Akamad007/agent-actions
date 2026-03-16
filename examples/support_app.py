@@ -21,7 +21,8 @@ Try it:
          -H "X-Actor-Id: support-alice" \
          -H "X-Roles: support,scope:support" \
          -H "X-Tenant-Id: acme" \
-         -d '{"inputs": {"account_id": "A-22", "amount": 25.0, "reason": "late delivery"}, "idempotency_key": "credit-A-22-25"}' | jq
+         -d '{"inputs": {"account_id": "A-22", "amount": 25.0,\
+ "reason": "late delivery"}, "idempotency_key": "credit-A-22-25"}' | jq
 
     curl -s -X POST http://localhost:8000/actions/suspend_account/execute \
          -H "Content-Type: application/json" \
