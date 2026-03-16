@@ -1,42 +1,38 @@
 """Central action runtime — the single place where every invocation is processed.
 
-Both the HTTP server and the MCP server call through here so behaviour is
-always consistent regardless of transport.
+All Django views call through here so behaviour is always consistent.
 
 Execution order for ``invoke()``:
   1.  Resolve action from registry
   2.  Parse + validate inputs
   3.  Build RequestContext via ContextResolver (may raise PermissionError)
   4.  Check required scopes — deny immediately if any are missing
-  5.  Check idempotency — short-circuit with cached result if seen before
-  6.  Run policy engine → ALLOW | REQUIRE_APPROVAL | DENY
-  7.  DENY             → audit, return denied result
-  8.  REQUIRE_APPROVAL → create Approval, audit, return approval_required result
-  9.  ALLOW            → execute (errors are audited), store idempotency, audit,
-                         return success result
+  5.  Run policy engine → ALLOW | REQUIRE_APPROVAL | DENY
+  6.  DENY             → audit, return denied result
+  7.  REQUIRE_APPROVAL → create Approval, audit, return approval_required result
+  8.  ALLOW            → execute (with optional idempotency), audit, return result
 
 Security guarantees:
-  - Auth errors surface as PermissionError; caller maps to HTTP 401.
+  - Auth errors surface as PermissionError; views map these to HTTP 401.
   - Scope failures are audited as "denied" before returning.
-  - Execution errors are audited as "error" before re-raising; internal
-    exception messages do not reach the HTTP response layer.
+  - Execution errors are audited as "error" before re-raising.
   - Approver identity is recorded on both the Approval row and the audit log.
-  - Idempotency keys are scoped per (action, key, tenant) to prevent
-    cross-tenant collisions.
+  - Idempotency keys are scoped per (action, key, tenant).
 """
 
 from __future__ import annotations
 
+import threading
 from typing import Any, Literal
 
 from pydantic import BaseModel, ValidationError
 
-from agent_actions.approvals import ApprovalNotFound, ApprovalService
-from agent_actions.audit import AuditLogger
-from agent_actions.context import ContextResolver, RequestContext
-from agent_actions.idempotency import IdempotencyService
-from agent_actions.policies import Decision, PolicyEngine
-from agent_actions.registry import ActionDef, ActionRegistry
+from django_agent_actions.approvals import ApprovalNotFound, ApprovalService
+from django_agent_actions.audit import AuditLogger
+from django_agent_actions.context import ContextResolver, RequestContext
+from django_agent_actions.idempotency import IdempotencyService
+from django_agent_actions.policies import Decision, PolicyEngine
+from django_agent_actions.registry import ActionDef, ActionRegistry
 
 
 class InvokeResult(BaseModel):
@@ -64,16 +60,23 @@ class ActionRuntime:
         self._context_resolver = context_resolver or ContextResolver()
 
     # ------------------------------------------------------------------
-    # Primary entry point
+    # Primary entry points
     # ------------------------------------------------------------------
 
     def invoke(
         self,
         action_name: str,
         raw_inputs: dict,
-        headers: dict,
+        *,
+        request=None,
+        headers: dict | None = None,
         idempotency_key: str | None = None,
     ) -> InvokeResult:
+        """Invoke an action.
+
+        Pass either a Django ``request`` (preferred) or a plain ``headers``
+        dict.  If both are provided, ``request`` takes precedence.
+        """
         # 1. Resolve action
         action = self.registry.get(action_name)
 
@@ -86,7 +89,10 @@ class ActionRuntime:
         inputs_dict = validated.model_dump()
 
         # 3. Build context — PermissionError propagates to caller (→ HTTP 401)
-        ctx = self._context_resolver.resolve(headers)
+        if request is not None:
+            ctx = self._context_resolver.resolve_request(request)
+        else:
+            ctx = self._context_resolver.resolve(headers or {})
 
         # 4. Scope check — fast deny before any DB access
         missing = [s for s in action.required_scopes if not ctx.has_scope(s)]
@@ -122,9 +128,7 @@ class ActionRuntime:
             return InvokeResult(status="denied", message="Action denied by policy.")
 
         # 7. REQUIRE_APPROVAL (from policy OR action flag)
-        needs_approval = (
-            decision == Decision.REQUIRE_APPROVAL or action.approval_required
-        )
+        needs_approval = decision == Decision.REQUIRE_APPROVAL or action.approval_required
         if needs_approval:
             approval = self.approvals.create(
                 action_name=action_name,
@@ -139,12 +143,12 @@ class ActionRuntime:
                 inputs=inputs_dict,
                 policy_decision=decision.value,
                 status="approval_required",
-                approval_id=approval.id,
+                approval_id=str(approval.id),
                 idempotency_key=idempotency_key,
             )
             return InvokeResult(
                 status="approval_required",
-                approval_id=approval.id,
+                approval_id=str(approval.id),
                 message="Action requires human approval before execution.",
             )
 
@@ -163,7 +167,6 @@ class ActionRuntime:
             else:
                 result = self._execute(action, inputs_dict, ctx)
         except Exception:
-            # Always audit execution failures; do not surface internal details.
             self.audit_logger.log(
                 action_name=action_name,
                 actor_id=ctx.actor_id,
@@ -203,17 +206,7 @@ class ActionRuntime:
         *,
         approver_id: str | None = None,
     ) -> InvokeResult:
-        """Execute an action whose approval has been granted.
-
-        The original actor's context is reconstructed from the stored approval.
-        The policy is *not* re-evaluated — the approval decision itself is the
-        authorisation gate.  *approver_id* is persisted on the Approval row and
-        on the audit log.
-
-        Note: the original actor's roles are not stored on the Approval, so the
-        reconstructed context has an empty roles list.  This is a known
-        limitation; scope/role checks during resumed execution are skipped.
-        """
+        """Execute an action whose approval has been granted."""
         try:
             approval = self.approvals.get(approval_id)
         except ApprovalNotFound:
@@ -227,11 +220,10 @@ class ActionRuntime:
             authenticated=True,
         )
 
-        def execute_fn():
-            return self._execute(action, inputs_dict, ctx)
-
         updated_approval = self.approvals.approve(
-            approval_id, execute_fn, approver_id=approver_id
+            approval_id,
+            lambda: self._execute(action, inputs_dict, ctx),
+            approver_id=approver_id,
         )
         result = updated_approval.get_result()
 
@@ -288,3 +280,56 @@ class ActionRuntime:
         if "ctx" in sig.parameters:
             return action.fn(**inputs_dict, ctx=ctx)
         return action.fn(**inputs_dict)
+
+
+# ---------------------------------------------------------------------------
+# Module-level singletons — used by views and the @action decorator ecosystem
+# ---------------------------------------------------------------------------
+
+# Global registry — users register their actions here.
+from django_agent_actions.registry import ActionRegistry  # noqa: E402
+
+registry = ActionRegistry()
+
+_runtime: ActionRuntime | None = None
+_runtime_lock = threading.Lock()
+
+
+def get_runtime() -> ActionRuntime:
+    """Return the lazily-initialised module-level runtime.
+
+    The runtime is constructed the first time this function is called, reading
+    optional configuration from ``settings.AGENT_ACTIONS``.
+
+    Supported settings keys::
+
+        AGENT_ACTIONS = {
+            "DEFAULT_POLICY": RiskBasedPolicy(),   # default: allow all
+            "AUTH_BACKEND": MyAuthBackend(),        # default: trust X-* headers
+        }
+    """
+    global _runtime
+    if _runtime is None:
+        with _runtime_lock:
+            if _runtime is None:
+                _runtime = _build_runtime()
+    return _runtime
+
+
+def _build_runtime() -> ActionRuntime:
+    from django.conf import settings
+
+    from django_agent_actions.policies import DefaultPolicy, PolicyEngine
+
+    agent_settings: dict = getattr(settings, "AGENT_ACTIONS", {})
+    default_policy = agent_settings.get("DEFAULT_POLICY", DefaultPolicy())
+    auth_backend = agent_settings.get("AUTH_BACKEND", None)
+
+    return ActionRuntime(
+        registry=registry,
+        policy_engine=PolicyEngine(default_policy),
+        audit_logger=AuditLogger(),
+        idempotency_service=IdempotencyService(),
+        approval_service=ApprovalService(),
+        context_resolver=ContextResolver(auth_backend=auth_backend),
+    )

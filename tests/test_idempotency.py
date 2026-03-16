@@ -5,27 +5,29 @@ from __future__ import annotations
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-from agent_actions.decorators import action
-from agent_actions.policies import DefaultPolicy, PolicyEngine
-from agent_actions.runtime import ActionRuntime
+import pytest
+
+from django_agent_actions.approvals import ApprovalService
+from django_agent_actions.audit import AuditLogger
+from django_agent_actions.decorators import action
+from django_agent_actions.idempotency import IdempotencyService
+from django_agent_actions.policies import DefaultPolicy, PolicyEngine
+from django_agent_actions.runtime import ActionRuntime
 
 
-def setup_runtime(registry, session_factory):
-    from agent_actions.approvals import ApprovalService
-    from agent_actions.audit import AuditLogger
-    from agent_actions.idempotency import IdempotencyService
-
+def setup_runtime(registry):
     return ActionRuntime(
         registry=registry,
         policy_engine=PolicyEngine(DefaultPolicy()),
-        audit_logger=AuditLogger(session_factory),
-        idempotency_service=IdempotencyService(session_factory),
-        approval_service=ApprovalService(session_factory),
+        audit_logger=AuditLogger(),
+        idempotency_service=IdempotencyService(),
+        approval_service=ApprovalService(),
     )
 
 
+@pytest.mark.django_db(transaction=True)
 class TestIdempotency:
-    def test_second_call_with_same_key_returns_cached(self, registry, session_factory):
+    def test_second_call_with_same_key_returns_cached(self, registry):
         call_count = {"n": 0}
 
         @action(name="refund", description="Issue refund", risk="low")
@@ -34,9 +36,8 @@ class TestIdempotency:
             return {"invoice_id": invoice_id, "amount": amount, "call": call_count["n"]}
 
         registry.register(issue_refund._action_def)
-        runtime = setup_runtime(registry, session_factory)
+        runtime = setup_runtime(registry)
 
-        # First call
         r1 = runtime.invoke(
             action_name="refund",
             raw_inputs={"invoice_id": "INV-1", "amount": 50.0},
@@ -46,7 +47,6 @@ class TestIdempotency:
         assert r1.status == "success"
         assert call_count["n"] == 1
 
-        # Second call — same key
         r2 = runtime.invoke(
             action_name="refund",
             raw_inputs={"invoice_id": "INV-1", "amount": 50.0},
@@ -55,9 +55,9 @@ class TestIdempotency:
         )
         assert r2.status == "duplicate"
         assert r2.result == r1.result
-        assert call_count["n"] == 1  # function not called again
+        assert call_count["n"] == 1
 
-    def test_different_keys_execute_independently(self, registry, session_factory):
+    def test_different_keys_execute_independently(self, registry):
         call_count = {"n": 0}
 
         @action(name="send_email", description="Send email", risk="low")
@@ -66,7 +66,7 @@ class TestIdempotency:
             return {"to": to, "call": call_count["n"]}
 
         registry.register(send_email._action_def)
-        runtime = setup_runtime(registry, session_factory)
+        runtime = setup_runtime(registry)
 
         r1 = runtime.invoke(
             action_name="send_email",
@@ -85,7 +85,7 @@ class TestIdempotency:
         assert r2.status == "success"
         assert call_count["n"] == 2
 
-    def test_no_idempotency_key_always_executes(self, registry, session_factory):
+    def test_no_idempotency_key_always_executes(self, registry):
         call_count = {"n": 0}
 
         @action(name="no_key_action", description="No key", risk="low")
@@ -94,7 +94,7 @@ class TestIdempotency:
             return {"x": x}
 
         registry.register(no_key_action._action_def)
-        runtime = setup_runtime(registry, session_factory)
+        runtime = setup_runtime(registry)
 
         for _ in range(3):
             runtime.invoke(
@@ -105,7 +105,7 @@ class TestIdempotency:
 
         assert call_count["n"] == 3
 
-    def test_same_key_different_actions_execute_independently(self, registry, session_factory):
+    def test_same_key_different_actions_execute_independently(self, registry):
         calls = {"a": 0, "b": 0}
 
         @action(name="action_a", description="Action A", risk="low")
@@ -120,7 +120,7 @@ class TestIdempotency:
 
         registry.register(action_a._action_def)
         registry.register(action_b._action_def)
-        runtime = setup_runtime(registry, session_factory)
+        runtime = setup_runtime(registry)
 
         runtime.invoke(
             action_name="action_a",
@@ -136,9 +136,9 @@ class TestIdempotency:
         )
 
         assert calls["a"] == 1
-        assert calls["b"] == 1  # different action_name namespace
+        assert calls["b"] == 1
 
-    def test_concurrent_same_key_executes_only_once(self, registry, session_factory):
+    def test_concurrent_same_key_executes_only_once(self, registry):
         call_count = {"n": 0}
         entered_execution = threading.Event()
         release_execution = threading.Event()
@@ -151,7 +151,7 @@ class TestIdempotency:
             return {"invoice_id": invoice_id, "call": call_count["n"]}
 
         registry.register(race_refund._action_def)
-        runtime = setup_runtime(registry, session_factory)
+        runtime = setup_runtime(registry)
 
         def invoke():
             return runtime.invoke(

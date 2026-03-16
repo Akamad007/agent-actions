@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Callable, Literal
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
-    from agent_actions.policies import PolicyRule
+    from django_agent_actions.policies import PolicyRule
 
 
 @dataclass

@@ -25,7 +25,7 @@ from typing import Any, Callable, Literal, get_type_hints
 
 from pydantic import BaseModel, create_model
 
-from agent_actions.registry import ActionDef
+from django_agent_actions.registry import ActionDef
 
 
 def _build_input_model(name: str, fn: Callable) -> type[BaseModel]:

@@ -15,8 +15,8 @@ from enum import Enum
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from agent_actions.context import RequestContext
-    from agent_actions.registry import ActionDef
+    from django_agent_actions.context import RequestContext
+    from django_agent_actions.registry import ActionDef
 
 
 class Decision(str, Enum):

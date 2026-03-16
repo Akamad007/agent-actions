@@ -1,26 +1,17 @@
-"""Shared pytest fixtures — tests use isolated SQLite database files."""
+"""Shared pytest fixtures for the Django-backed test suite."""
 
 from __future__ import annotations
 
+import django
 import pytest
-from fastapi.testclient import TestClient
 
-from agent_actions.approvals import ApprovalService
-from agent_actions.audit import AuditLogger
-from agent_actions.context import RequestContext
-from agent_actions.db import create_db_engine, init_db, make_session_factory
-from agent_actions.idempotency import IdempotencyService
-from agent_actions.policies import DefaultPolicy, PolicyEngine
-from agent_actions.registry import ActionRegistry
-from agent_actions.runtime import ActionRuntime
-from agent_actions.server import AgentActionApp
-
-
-@pytest.fixture
-def session_factory(tmp_path):
-    engine = create_db_engine(f"sqlite:///{tmp_path}/test.db")
-    init_db(engine)
-    return make_session_factory(engine)
+from django_agent_actions.approvals import ApprovalService
+from django_agent_actions.audit import AuditLogger
+from django_agent_actions.context import RequestContext
+from django_agent_actions.idempotency import IdempotencyService
+from django_agent_actions.policies import DefaultPolicy, PolicyEngine
+from django_agent_actions.registry import ActionRegistry
+from django_agent_actions.runtime import ActionRuntime
 
 
 @pytest.fixture
@@ -34,18 +25,18 @@ def policy_engine():
 
 
 @pytest.fixture
-def audit_logger(session_factory):
-    return AuditLogger(session_factory)
+def audit_logger():
+    return AuditLogger()
 
 
 @pytest.fixture
-def idempotency_service(session_factory):
-    return IdempotencyService(session_factory)
+def idempotency_service():
+    return IdempotencyService()
 
 
 @pytest.fixture
-def approval_service(session_factory):
-    return ApprovalService(session_factory)
+def approval_service():
+    return ApprovalService()
 
 
 @pytest.fixture
@@ -67,11 +58,3 @@ def default_headers():
 @pytest.fixture
 def ctx():
     return RequestContext(actor_id="test-user", roles=["user"], tenant_id="tenant-1")
-
-
-@pytest.fixture
-def app_client(tmp_path):
-    """Full AgentActionApp wired to a temp SQLite file, returns a TestClient."""
-    db_url = f"sqlite:///{tmp_path}/test.db"
-    app = AgentActionApp(db_url=db_url)
-    return app, TestClient(app.fastapi_app())

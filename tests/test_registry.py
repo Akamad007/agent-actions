@@ -6,8 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from agent_actions.decorators import action
-from agent_actions.registry import ActionDef, ActionRegistry
+from django_agent_actions.decorators import action
+from django_agent_actions.registry import ActionDef, ActionRegistry
 
 
 def make_simple_action(name="test_action"):
@@ -86,7 +86,7 @@ class TestActionDefSchema:
         assert "amount" in props
 
     def test_ctx_excluded_from_schema(self):
-        from agent_actions.context import RequestContext
+        from django_agent_actions.context import RequestContext
 
         @action(name="ctx_action", description="desc", risk="low")
         def fn(value: str, ctx: RequestContext):

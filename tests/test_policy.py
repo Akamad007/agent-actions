@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from agent_actions.context import RequestContext
-from agent_actions.decorators import action
-from agent_actions.policies import (
+from django_agent_actions.context import RequestContext
+from django_agent_actions.decorators import action
+from django_agent_actions.policies import (
     Decision,
     DefaultPolicy,
     DenyPolicy,

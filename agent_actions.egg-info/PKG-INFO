@@ -1,13 +1,13 @@
 Metadata-Version: 2.4
 Name: agent-actions
-Version: 0.1.0
-Summary: Expose safe backend actions to LLM agents via MCP and HTTP
+Version: 0.2.0
+Summary: Expose safe backend actions to LLM agents as a Django app
 License-Expression: MIT
 Project-URL: Homepage, https://github.com/akamad007/agent-actions
 Project-URL: Repository, https://github.com/akamad007/agent-actions.git
 Project-URL: Issues, https://github.com/akamad007/agent-actions/issues
 Project-URL: Documentation, https://github.com/akamad007/agent-actions#readme
-Keywords: llm,agent,mcp,fastapi,actions
+Keywords: llm,agent,django,actions
 Classifier: Development Status :: 3 - Alpha
 Classifier: Intended Audience :: Developers
 Classifier: Operating System :: OS Independent
@@ -15,23 +15,18 @@ Classifier: Programming Language :: Python :: 3
 Classifier: Programming Language :: Python :: 3 :: Only
 Classifier: Programming Language :: Python :: 3.11
 Classifier: Programming Language :: Python :: 3.12
-Classifier: Framework :: FastAPI
+Classifier: Framework :: Django
 Classifier: Topic :: Software Development :: Libraries :: Python Modules
 Requires-Python: >=3.11
 Description-Content-Type: text/markdown
 License-File: LICENSE
-Requires-Dist: fastapi>=0.111
-Requires-Dist: uvicorn[standard]>=0.29
+Requires-Dist: django>=4.2
 Requires-Dist: pydantic>=2.7
-Requires-Dist: sqlalchemy>=2.0
-Requires-Dist: mcp[cli]>=1.0
 Provides-Extra: dev
 Requires-Dist: build>=1.2; extra == "dev"
 Requires-Dist: twine>=5.0; extra == "dev"
 Requires-Dist: pytest>=8.0; extra == "dev"
-Requires-Dist: httpx>=0.27; extra == "dev"
-Requires-Dist: pytest-asyncio>=0.23; extra == "dev"
-Requires-Dist: anyio>=4.0; extra == "dev"
+Requires-Dist: pytest-django>=4.8; extra == "dev"
 Requires-Dist: ruff>=0.11; extra == "dev"
 Dynamic: license-file
 

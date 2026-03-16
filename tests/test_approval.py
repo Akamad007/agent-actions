@@ -7,30 +7,30 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from agent_actions.approvals import ApprovalAlreadyResolved, ApprovalNotFound
-from agent_actions.context import RequestContext
-from agent_actions.decorators import action
-from agent_actions.policies import DefaultPolicy, PolicyEngine
-from agent_actions.runtime import ActionRuntime
+from django_agent_actions.approvals import ApprovalAlreadyResolved, ApprovalNotFound
+from django_agent_actions.context import RequestContext
+from django_agent_actions.decorators import action
+from django_agent_actions.policies import DefaultPolicy, PolicyEngine
+from django_agent_actions.runtime import ActionRuntime
+from django_agent_actions.approvals import ApprovalService
+from django_agent_actions.audit import AuditLogger
+from django_agent_actions.idempotency import IdempotencyService
 
 
-def setup_runtime_with_action(registry, session_factory, action_fn):
-    from agent_actions.approvals import ApprovalService
-    from agent_actions.audit import AuditLogger
-    from agent_actions.idempotency import IdempotencyService
-
+def setup_runtime_with_action(registry, action_fn):
     registry.register(action_fn._action_def)
     return ActionRuntime(
         registry=registry,
         policy_engine=PolicyEngine(DefaultPolicy()),
-        audit_logger=AuditLogger(session_factory),
-        idempotency_service=IdempotencyService(session_factory),
-        approval_service=ApprovalService(session_factory),
+        audit_logger=AuditLogger(),
+        idempotency_service=IdempotencyService(),
+        approval_service=ApprovalService(),
     )
 
 
+@pytest.mark.django_db(transaction=True)
 class TestApprovalWorkflow:
-    def test_approval_required_action_returns_pending(self, registry, session_factory):
+    def test_approval_required_action_returns_pending(self, registry):
         @action(
             name="approve_invoice",
             description="Approve an invoice",
@@ -40,7 +40,7 @@ class TestApprovalWorkflow:
         def approve_invoice(invoice_id: str):
             return {"invoice_id": invoice_id, "status": "approved"}
 
-        runtime = setup_runtime_with_action(registry, session_factory, approve_invoice)
+        runtime = setup_runtime_with_action(registry, approve_invoice)
         result = runtime.invoke(
             action_name="approve_invoice",
             raw_inputs={"invoice_id": "INV-1"},
@@ -50,7 +50,7 @@ class TestApprovalWorkflow:
         assert result.status == "approval_required"
         assert result.approval_id is not None
 
-    def test_approved_action_executes_and_returns_result(self, registry, session_factory):
+    def test_approved_action_executes_and_returns_result(self, registry):
         call_count = {"n": 0}
 
         @action(
@@ -63,9 +63,8 @@ class TestApprovalWorkflow:
             call_count["n"] += 1
             return {"payload": payload, "done": True}
 
-        runtime = setup_runtime_with_action(registry, session_factory, risky_op)
+        runtime = setup_runtime_with_action(registry, risky_op)
 
-        # First call: returns approval_required
         result = runtime.invoke(
             action_name="risky_op",
             raw_inputs={"payload": "test"},
@@ -74,16 +73,14 @@ class TestApprovalWorkflow:
         assert result.status == "approval_required"
         approval_id = result.approval_id
 
-        # Function has not been called yet
         assert call_count["n"] == 0
 
-        # Approve and execute
         approved_result = runtime.invoke_approved(approval_id)
         assert approved_result.status == "success"
         assert approved_result.result["done"] is True
         assert call_count["n"] == 1
 
-    def test_rejected_action_returns_denied(self, registry, session_factory):
+    def test_rejected_action_returns_denied(self, registry):
         @action(
             name="reject_test",
             description="Will be rejected",
@@ -93,7 +90,7 @@ class TestApprovalWorkflow:
         def reject_test(x: str):
             return {"x": x}
 
-        runtime = setup_runtime_with_action(registry, session_factory, reject_test)
+        runtime = setup_runtime_with_action(registry, reject_test)
 
         result = runtime.invoke(
             action_name="reject_test",
@@ -105,7 +102,7 @@ class TestApprovalWorkflow:
         rejected = runtime.invoke_rejected(approval_id)
         assert rejected.status == "denied"
 
-    def test_double_approve_raises(self, registry, session_factory):
+    def test_double_approve_raises(self, registry):
         @action(
             name="double_approve",
             description="Test double approve",
@@ -115,7 +112,7 @@ class TestApprovalWorkflow:
         def double_approve(x: str):
             return {"x": x}
 
-        runtime = setup_runtime_with_action(registry, session_factory, double_approve)
+        runtime = setup_runtime_with_action(registry, double_approve)
 
         result = runtime.invoke(
             action_name="double_approve",
@@ -126,16 +123,14 @@ class TestApprovalWorkflow:
 
         runtime.invoke_approved(approval_id)
 
-        from agent_actions.approvals import ApprovalAlreadyResolved
-
         with pytest.raises(ApprovalAlreadyResolved):
             runtime.invoke_approved(approval_id)
 
-    def test_approve_nonexistent_raises(self, registry, session_factory, runtime):
+    def test_approve_nonexistent_raises(self, runtime):
         with pytest.raises(ApprovalNotFound):
             runtime.invoke_approved("00000000-0000-0000-0000-000000000000")
 
-    def test_concurrent_approve_executes_only_once(self, registry, session_factory):
+    def test_concurrent_approve_executes_only_once(self, registry):
         call_count = {"n": 0}
         entered_execution = threading.Event()
         release_execution = threading.Event()
@@ -152,7 +147,7 @@ class TestApprovalWorkflow:
             call_count["n"] += 1
             return {"x": x, "call": call_count["n"]}
 
-        runtime = setup_runtime_with_action(registry, session_factory, approve_race)
+        runtime = setup_runtime_with_action(registry, approve_race)
         pending = runtime.invoke(
             action_name="approve_race",
             raw_inputs={"x": "test"},
@@ -183,9 +178,7 @@ class TestApprovalWorkflow:
         assert outcomes == ["already_resolved", "success"]
         assert call_count["n"] == 1
 
-    def test_concurrent_approve_and_reject_only_one_terminal_state_wins(
-        self, registry, session_factory
-    ):
+    def test_concurrent_approve_and_reject_only_one_terminal_state_wins(self, registry):
         call_count = {"n": 0}
         entered_execution = threading.Event()
         release_execution = threading.Event()
@@ -202,7 +195,7 @@ class TestApprovalWorkflow:
             call_count["n"] += 1
             return {"x": x}
 
-        runtime = setup_runtime_with_action(registry, session_factory, approve_reject_race)
+        runtime = setup_runtime_with_action(registry, approve_reject_race)
         pending = runtime.invoke(
             action_name="approve_reject_race",
             raw_inputs={"x": "test"},
@@ -235,45 +228,3 @@ class TestApprovalWorkflow:
         assert terminal_results[0].status == "success"
         assert result_1 == "already_resolved" or result_2 == "already_resolved"
         assert call_count["n"] == 1
-
-
-class TestApprovalHTTPEndpoints:
-    def test_full_approval_flow_via_http(self, app_client):
-        from agent_actions import action as action_decorator
-
-        app, client = app_client
-
-        @action_decorator(
-            name="http_approval_test",
-            description="HTTP approval test",
-            risk="high",
-            approval_required=True,
-        )
-        def http_approval_test(amount: float, ctx: RequestContext):
-            return {"amount": amount, "actor": ctx.actor_id}
-
-        app.register(http_approval_test)
-
-        # Invoke — expect approval_required
-        resp = client.post(
-            "/actions/http_approval_test/execute",
-            json={"inputs": {"amount": 99.99}},
-            headers={"X-Actor-Id": "bob"},
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["status"] == "approval_required"
-        approval_id = data["approval_id"]
-
-        # List pending approvals
-        resp2 = client.get("/approvals?status=pending")
-        assert resp2.status_code == 200
-        pending = resp2.json()
-        assert any(a["id"] == approval_id for a in pending)
-
-        # Approve
-        resp3 = client.post(f"/approvals/{approval_id}/approve")
-        assert resp3.status_code == 200
-        final = resp3.json()
-        assert final["status"] == "success"
-        assert final["result"]["amount"] == 99.99

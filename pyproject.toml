@@ -3,14 +3,14 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agent-actions"
+name = "django-agent-actions"
 dynamic = ["version"]
-description = "Expose safe backend actions to LLM agents via MCP and HTTP"
+description = "Expose safe backend actions to LLM agents as a Django app"
 readme = "README.md"
-requires-python = ">=3.11"
+    requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
-keywords = ["llm", "agent", "mcp", "fastapi", "actions"]
+keywords = ["llm", "agent", "django", "actions"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -19,15 +19,12 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Framework :: FastAPI",
+    "Framework :: Django",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    "fastapi>=0.111",
-    "uvicorn[standard]>=0.29",
+    "django>=4.2",
     "pydantic>=2.7",
-    "sqlalchemy>=2.0",
-    "mcp[cli]>=1.0",
 ]
 
 [project.urls]
@@ -41,27 +38,25 @@ dev = [
     "build>=1.2",
     "twine>=5.0",
     "pytest>=8.0",
-    "httpx>=0.27",
-    "pytest-asyncio>=0.23",
-    "anyio>=4.0",
+    "pytest-django>=4.8",
     "ruff>=0.11",
 ]
 
 [tool.setuptools.dynamic]
-version = { attr = "agent_actions.__version__" }
+version = { attr = "django_agent_actions.__version__" }
 
 [tool.setuptools]
 include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["agent_actions*"]
+include = ["django_agent_actions*"]
 
 [tool.setuptools.package-data]
-agent_actions = ["py.typed"]
+django_agent_actions = ["py.typed"]
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
+DJANGO_SETTINGS_MODULE = "tests.settings"
 testpaths = ["tests"]
 
 [tool.ruff]
