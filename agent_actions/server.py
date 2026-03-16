@@ -32,6 +32,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from agent_actions import __version__
 from agent_actions.approvals import ApprovalAlreadyResolved, ApprovalNotFound, ApprovalService
 from agent_actions.audit import AuditLogger
 from agent_actions.context import ContextResolver
@@ -191,7 +192,7 @@ class AgentActionApp:
         api = FastAPI(
             title="agent-actions",
             description="Expose safe backend actions to LLM agents",
-            version="0.1.0",
+            version=__version__,
         )
 
         runtime = self.runtime

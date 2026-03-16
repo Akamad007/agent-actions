@@ -37,6 +37,12 @@
 ### Install
 
 ```bash
+pip install agent-actions
+```
+
+For local development:
+
+```bash
 pip install -e ".[dev]"
 ```
 
@@ -77,6 +83,34 @@ mcp_server  = app.mcp_server()
 ```bash
 uvicorn examples.basic_app:fastapi_app --reload
 mcp run examples/basic_app.py
+```
+
+---
+
+## Publishing
+
+Build a release artifact:
+
+```bash
+python -m build
+```
+
+Validate the generated distributions:
+
+```bash
+python -m twine check dist/*
+```
+
+Upload to TestPyPI first:
+
+```bash
+python -m twine upload --repository testpypi dist/*
+```
+
+Then upload to PyPI:
+
+```bash
+python -m twine upload dist/*
 ```
 
 ---
