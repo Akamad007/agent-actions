@@ -1,0 +1,356 @@
+Metadata-Version: 2.4
+Name: agent-actions
+Version: 0.1.0
+Summary: Expose safe backend actions to LLM agents via MCP and HTTP
+License: MIT
+Keywords: llm,agent,mcp,fastapi,actions
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi>=0.111
+Requires-Dist: uvicorn[standard]>=0.29
+Requires-Dist: pydantic>=2.7
+Requires-Dist: sqlalchemy>=2.0
+Requires-Dist: mcp[cli]>=1.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: httpx>=0.27; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.23; extra == "dev"
+Requires-Dist: anyio>=4.0; extra == "dev"
+
+# agent-actions
+
+> Expose safe backend business actions to any LLM agent — via MCP and HTTP.
+
+`agent-actions` is a lightweight Python framework that lets product engineers define normal Python functions and expose them as safe, auditable, agent-callable tools. Think FastAPI, but for actions.
+
+---
+
+## Features
+
+| Feature | Status |
+|---|---|
+| `@action` decorator with typed schemas | ✅ |
+| Auto-generated Pydantic input models | ✅ |
+| Central runtime (validate → policy → execute) | ✅ |
+| Policy engine (allow / deny / require_approval) | ✅ |
+| Approval workflow (pending → approved / rejected) | ✅ |
+| Audit logging (SQLite) | ✅ |
+| Idempotency (duplicate suppression by key) | ✅ |
+| HTTP API (FastAPI) | ✅ |
+| MCP exposure (FastMCP) | ✅ |
+| Request context (actor_id, roles, tenant_id) | ✅ |
+
+---
+
+## Quickstart
+
+### Install
+
+```bash
+pip install -e ".[dev]"
+```
+
+### Define actions
+
+```python
+from agent_actions import action, AgentActionApp, RequestContext
+
+@action(
+    name="get_invoice",
+    description="Fetch a single invoice",
+    risk="low",
+    approval_required=False,
+)
+def get_invoice(invoice_id: str, ctx: RequestContext):
+    return {"invoice_id": invoice_id, "status": "open", "amount": 149.99}
+
+@action(
+    name="approve_invoice",
+    description="Approve an invoice for payment",
+    risk="high",
+    approval_required=True,
+)
+def approve_invoice(invoice_id: str, reason: str, ctx: RequestContext):
+    return {"invoice_id": invoice_id, "status": "approved", "reason": reason}
+
+@action(
+    name="issue_refund",
+    description="Issue a refund — idempotent",
+    risk="medium",
+)
+def issue_refund(invoice_id: str, amount: float, ctx: RequestContext):
+    return {"invoice_id": invoice_id, "refund_amount": amount, "status": "refunded"}
+
+app = AgentActionApp()
+app.register(get_invoice)
+app.register(approve_invoice)
+app.register(issue_refund)
+
+fastapi_app = app.fastapi_app()
+mcp_server  = app.mcp_server()
+```
+
+### Run the HTTP server
+
+```bash
+uvicorn examples.basic_app:fastapi_app --reload
+```
+
+### Run the MCP server
+
+```bash
+mcp run examples/basic_app.py
+```
+
+---
+
+## HTTP API
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/health` | Liveness check |
+| `GET` | `/actions` | List registered actions and their schemas |
+| `POST` | `/actions/{name}/execute` | Invoke an action |
+| `GET` | `/approvals` | List approvals (filter by `?status=pending`) |
+| `POST` | `/approvals/{id}/approve` | Approve and execute a pending action |
+| `POST` | `/approvals/{id}/reject` | Reject a pending action |
+| `GET` | `/audit-logs` | Paginated audit log |
+
+### Execute an action
+
+```bash
+curl -s -X POST http://localhost:8000/actions/get_invoice/execute \
+  -H "Content-Type: application/json" \
+  -H "X-Actor-Id: alice" \
+  -H "X-Roles: finance,user" \
+  -H "X-Tenant-Id: acme" \
+  -d '{"inputs": {"invoice_id": "INV-001"}}' | jq
+```
+
+```json
+{
+  "status": "success",
+  "result": {
+    "invoice_id": "INV-001",
+    "status": "open",
+    "amount": 149.99
+  }
+}
+```
+
+### Approval workflow
+
+```bash
+# 1. Invoke a high-risk action
+curl -s -X POST http://localhost:8000/actions/approve_invoice/execute \
+  -H "Content-Type: application/json" \
+  -H "X-Actor-Id: alice" \
+  -d '{"inputs": {"invoice_id": "INV-001", "reason": "Budget approved"}}' | jq
+```
+
+```json
+{
+  "status": "approval_required",
+  "approval_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "message": "Action requires human approval before execution."
+}
+```
+
+```bash
+# 2. Approve it
+curl -s -X POST http://localhost:8000/approvals/3fa85f64-5717-4562-b3fc-2c963f66afa6/approve | jq
+```
+
+```json
+{
+  "status": "success",
+  "result": {
+    "invoice_id": "INV-001",
+    "status": "approved",
+    "reason": "Budget approved"
+  }
+}
+```
+
+### Idempotency
+
+```bash
+# First call — executes and stores result
+curl -s -X POST http://localhost:8000/actions/issue_refund/execute \
+  -H "Content-Type: application/json" \
+  -H "X-Actor-Id: alice" \
+  -d '{"inputs": {"invoice_id": "INV-001", "amount": 49.99}, "idempotency_key": "refund-INV-001"}' | jq
+
+# Second call — returns cached result without re-executing
+curl -s -X POST http://localhost:8000/actions/issue_refund/execute \
+  -H "Content-Type: application/json" \
+  -H "X-Actor-Id: alice" \
+  -d '{"inputs": {"invoice_id": "INV-001", "amount": 49.99}, "idempotency_key": "refund-INV-001"}' | jq
+```
+
+---
+
+## Request Context
+
+Context is loaded from HTTP headers (no real auth — plug in your own):
+
+| Header | Field | Default |
+|---|---|---|
+| `X-Actor-Id` | `ctx.actor_id` | `"anonymous"` |
+| `X-Roles` | `ctx.roles` | `[]` |
+| `X-Tenant-Id` | `ctx.tenant_id` | `None` |
+
+---
+
+## Policies
+
+```python
+from agent_actions import (
+    AgentActionApp,
+    RoleBasedPolicy,
+    RiskBasedPolicy,
+    DenyPolicy,
+    RequireApprovalPolicy,
+)
+
+# App-level default: deny unless actor has "finance" role
+app = AgentActionApp(default_policy=RoleBasedPolicy(allowed_roles=["finance", "admin"]))
+
+# Per-action override
+@action(
+    name="view_report",
+    description="View report",
+    risk="low",
+    policy=RiskBasedPolicy(),   # high-risk -> require_approval
+)
+def view_report(report_id: str, ctx):
+    ...
+```
+
+Built-in policy rules:
+
+| Class | Behaviour |
+|---|---|
+| `DefaultPolicy` | Always ALLOW |
+| `DenyPolicy` | Always DENY |
+| `RequireApprovalPolicy` | Always REQUIRE_APPROVAL |
+| `RoleBasedPolicy(allowed_roles)` | ALLOW if actor has a matching role, else DENY |
+| `RiskBasedPolicy(risk_map)` | Map action risk level to a decision |
+
+Implement `PolicyRule` protocol to plug in OPA, Casbin, or any other engine.
+
+---
+
+## Audit Logs
+
+Every invocation is written to `audit_logs` in SQLite:
+
+```bash
+curl -s http://localhost:8000/audit-logs | jq
+```
+
+Fields: `action_name`, `actor_id`, `tenant_id`, `input_payload`, `policy_decision`, `status`, `approval_id`, `idempotency_key`, `result`, `created_at`.
+
+---
+
+## MCP Integration
+
+Actions are exposed as MCP tools automatically. Each tool has the same name, description, and JSON schema as the HTTP endpoint. Invocations flow through the same runtime (identical policy / audit / idempotency behaviour).
+
+```bash
+mcp run examples/basic_app.py
+```
+
+---
+
+## Tests
+
+```bash
+pytest tests/ -v
+```
+
+---
+
+## Project structure
+
+```
+agent_actions/
+├── __init__.py        Public API
+├── decorators.py      @action decorator
+├── registry.py        ActionRegistry + ActionDef
+├── context.py         RequestContext
+├── policies.py        PolicyEngine + built-in rules
+├── runtime.py         Central ActionRuntime
+├── audit.py           AuditLogger
+├── approvals.py       ApprovalService
+├── idempotency.py     IdempotencyService
+├── models.py          SQLAlchemy ORM models
+├── db.py              Engine + session setup
+├── mcp.py             FastMCP integration
+└── server.py          AgentActionApp + FastAPI routes
+examples/
+└── basic_app.py       3 example invoice actions
+tests/
+├── conftest.py
+├── test_registry.py
+├── test_policy.py
+├── test_approval.py
+└── test_idempotency.py
+```
+
+---
+
+## Switching to PostgreSQL
+
+```python
+app = AgentActionApp(db_url="postgresql+psycopg2://user:pass@localhost/mydb")
+```
+
+No code changes required. Run `alembic` for migrations in production.
+
+---
+
+## Architecture summary
+
+All invocations — HTTP and MCP — flow through a single `ActionRuntime`. The runtime validates inputs, builds a `RequestContext`, runs the `PolicyEngine`, checks idempotency, optionally queues an approval, executes the function, stores the audit log, and returns a structured `InvokeResult`. This keeps transport concerns (HTTP, MCP) completely separate from business logic.
+
+---
+
+## What is fully implemented vs stubbed
+
+### Fully implemented
+- `@action` decorator with automatic Pydantic schema extraction
+- Action registry (register, get, list)
+- Request context loaded from HTTP headers
+- Policy engine with 5 built-in rules
+- Central runtime with complete execution flow
+- Approval workflow (create, approve, reject, resume execution)
+- Audit logging to SQLite
+- Idempotency (suppress duplicate execution by key)
+- FastAPI HTTP server with 7 endpoints
+- MCP server via FastMCP
+- In-memory SQLite test suite
+
+### Not implemented in MVP (intentional)
+- Real authentication / JWT validation
+- Async action execution / queues
+- Webhook notifications on approval
+- Postgres migrations (Alembic)
+- Multi-step / chained actions
+- Rate limiting
+- Admin UI
+
+---
+
+## 10 sensible v2 improvements
+
+1. **Async runtime** — make `ActionRuntime.invoke` async; support `async def` action functions natively.
+2. **Webhook notifications** — fire a configurable webhook when an approval is created/resolved.
+3. **Approval expiry** — automatically reject approvals older than a configurable TTL.
+4. **Structured input annotations** — support `Field(description=..., examples=...)` in Pydantic models for richer MCP tool schemas.
+5. **Alembic migrations** — auto-generate migrations so Postgres deployments can evolve safely.
+6. **JWT / API-key middleware** — a pluggable `ContextLoader` that validates tokens and populates `RequestContext`.
+7. **Rate limiting per actor** — built-in per-actor rate limiting backed by Redis or SQLite.
+8. **Composite policies** — `AnyOf([RoleBasedPolicy(...), RiskBasedPolicy()])` and `AllOf([...])` policy combinators.
+9. **Action versioning** — `@action(name="get_invoice", version="v2")` so old clients keep working.
+10. **CLI** — `agent-actions serve examples/basic_app.py` that discovers and serves actions without writing boilerplate.

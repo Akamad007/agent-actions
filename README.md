@@ -1,0 +1,500 @@
+# agent-actions
+
+> Expose safe backend business actions to any LLM agent — via MCP and HTTP.
+
+`agent-actions` is a lightweight Python framework that lets product engineers define normal Python functions and expose them as safe, auditable, agent-callable tools. Think FastAPI, but for actions.
+
+---
+
+## Features
+
+| Feature | Status |
+|---|---|
+| `@action` decorator with typed schemas | ✅ |
+| Auto-generated Pydantic input models | ✅ |
+| Central runtime (validate → scope check → policy → execute) | ✅ |
+| Policy engine (allow / deny / require_approval) | ✅ |
+| Required scopes per action | ✅ |
+| Approval workflow (pending → approved / rejected) | ✅ |
+| Approver identity captured on every decision | ✅ |
+| Audit logging with sensitive field redaction | ✅ |
+| Idempotency (per tenant, duplicate suppression by key) | ✅ |
+| Thread-safe runtime for concurrent requests | ✅ |
+| Atomic approval and idempotency state transitions | ✅ |
+| HTTP API (FastAPI) | ✅ |
+| MCP exposure (FastMCP) | ✅ |
+| Request context (actor_id, roles, tenant_id, authenticated) | ✅ |
+| AuthBackend plug-in interface | ✅ |
+| ContextResolver for clean auth wiring | ✅ |
+| Django DB auto-detection | ✅ |
+| Host SQLAlchemy session injection | ✅ |
+| Standalone SQLite fallback | ✅ |
+
+---
+
+## Quickstart
+
+### Install
+
+```bash
+pip install -e ".[dev]"
+```
+
+### Define actions
+
+```python
+from agent_actions import action, AgentActionApp, RequestContext
+
+@action(
+    name="get_invoice",
+    description="Fetch a single invoice",
+    risk="low",
+    required_scopes=["finance"],   # actor must hold this scope
+)
+def get_invoice(invoice_id: str, ctx: RequestContext):
+    return {"invoice_id": invoice_id, "status": "open", "amount": 149.99}
+
+@action(
+    name="approve_invoice",
+    description="Approve an invoice for payment",
+    risk="high",
+    approval_required=True,
+    required_scopes=["finance"],
+)
+def approve_invoice(invoice_id: str, reason: str, ctx: RequestContext):
+    return {"invoice_id": invoice_id, "status": "approved", "reason": reason}
+
+app = AgentActionApp()
+app.register(get_invoice)
+app.register(approve_invoice)
+
+fastapi_app = app.fastapi_app()
+mcp_server  = app.mcp_server()
+```
+
+### Run
+
+```bash
+uvicorn examples.basic_app:fastapi_app --reload
+mcp run examples/basic_app.py
+```
+
+---
+
+## Database modes
+
+### 1. Standalone (default — zero config)
+
+```python
+app = AgentActionApp()
+# Uses ./agent_actions.db (SQLite).  Tables are created automatically.
+```
+
+### 2. Explicit URL (any SQLAlchemy backend)
+
+```python
+app = AgentActionApp(db_url="postgresql+psycopg2://user:pass@localhost/mydb")
+```
+
+Tables are created on first startup (`CREATE TABLE IF NOT EXISTS`).  Use
+Alembic for schema migrations in production.
+
+### 3. Django auto-detection
+
+If Django is installed and `settings.configured` is `True`, the framework
+automatically extracts the `default` database URL and stores its tables
+(approvals, audit_logs, idempotency_records) in the same database.  No
+configuration required.
+
+```python
+# Inside a Django project — just instantiate:
+app = AgentActionApp()
+# Django's default DB is detected and used automatically.
+```
+
+Framework tables are **not** managed by Django migrations.  Call `init_db`
+once at startup to create them:
+
+```python
+# e.g. in AppConfig.ready() or a management command
+from agent_actions import init_db
+from agent_actions.db import create_db_engine
+engine = create_db_engine(your_db_url)
+init_db(engine)
+```
+
+### 4. Inject host session factory (FastAPI / SQLAlchemy host mode)
+
+When embedding agent-actions inside an existing FastAPI app that already has a
+database setup, pass the host's `sessionmaker` directly.  The framework will
+share the same connection pool and transactions.
+
+```python
+# In your existing FastAPI app:
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from agent_actions import AgentActionApp, init_db
+
+engine = create_engine("postgresql+psycopg2://user:pass@localhost/mydb")
+SessionLocal = sessionmaker(bind=engine)
+
+# Create framework tables in your database (once at startup):
+init_db(engine)
+
+# Wire up:
+app = AgentActionApp(session_factory=SessionLocal)
+fastapi_app = app.fastapi_app()
+```
+
+---
+
+## Concurrency and thread safety
+
+`agent-actions` is designed to be safe for normal multi-threaded web server
+use, including concurrent HTTP and MCP requests that share the same runtime.
+
+Current guarantees:
+
+- Request context is per-invocation. `actor_id`, `roles`, and `tenant_id` are
+  resolved into a fresh `RequestContext` for each call and are not stored in
+  module-level globals or thread-local singleton state.
+- SQLAlchemy sessions are created per operation through the configured
+  `sessionmaker`. The framework does not share a live `Session` object across
+  threads.
+- The action registry is safe for concurrent reads and registration.
+- Idempotency correctness is DB-backed, not memory-backed. For a given
+  `(action_name, idempotency_key, tenant_id)` tuple, only one caller is
+  allowed to execute the side effect; racing callers reuse the stored result.
+- Approval resolution uses atomic compare-and-set style DB updates so only one
+  terminal approval path wins under races.
+- HTTP and MCP both use the same `ActionRuntime`, so there is no less-safe
+  transport-specific execution path.
+
+Important scope note:
+
+- This is intentionally MVP-sized. It does not add a distributed lock manager
+  or cross-service coordination layer.
+- Correctness relies on the database for approval and idempotency state.
+- SQLite works for local development and lightweight threaded tests, but
+  PostgreSQL is the better choice for production concurrency.
+
+---
+
+## HTTP API
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/health` | Liveness check |
+| `GET` | `/actions` | List registered actions and their schemas |
+| `POST` | `/actions/{name}/execute` | Invoke an action |
+| `GET` | `/approvals` | List approvals (filter by `?status=pending`) |
+| `POST` | `/approvals/{id}/approve` | Approve and execute a pending action |
+| `POST` | `/approvals/{id}/reject` | Reject a pending action |
+| `GET` | `/audit-logs` | Paginated audit log (filter by `action_name`, `actor_id`, `tenant_id`) |
+
+### Execute an action
+
+```bash
+curl -s -X POST http://localhost:8000/actions/get_invoice/execute \
+  -H "Content-Type: application/json" \
+  -H "X-Actor-Id: alice" \
+  -H "X-Roles: finance" \
+  -H "X-Tenant-Id: acme" \
+  -d '{"inputs": {"invoice_id": "INV-001"}}' | jq
+```
+
+### Approve with approver identity
+
+```bash
+# Approve — approver identity is read from X-Actor-Id on this request
+curl -s -X POST http://localhost:8000/approvals/{id}/approve \
+  -H "X-Actor-Id: manager-bob" | jq
+```
+
+The approver's identity is persisted on the Approval row and in the audit log.
+
+### Idempotency
+
+```bash
+curl -s -X POST http://localhost:8000/actions/issue_refund/execute \
+  -H "X-Actor-Id: alice" \
+  -H "X-Tenant-Id: acme" \
+  -d '{"inputs": {"invoice_id": "INV-001", "amount": 49.99}, "idempotency_key": "refund-INV-001"}' | jq
+```
+
+Idempotency keys are scoped per `(action, key, tenant_id)` — two tenants
+using the same key for the same action do not interfere with each other.
+
+Under concurrent requests, idempotency is enforced in the database. If two
+threads submit the same action and key at nearly the same time, only one of
+them executes the action and the other receives the stored result.
+
+---
+
+## Authentication and context
+
+### Default: trust X-* headers (gateway / middleware pattern)
+
+Context is loaded from HTTP headers set by upstream middleware:
+
+| Header | Field | Default |
+|---|---|---|
+| `X-Actor-Id` | `ctx.actor_id` | `"anonymous"` |
+| `X-Roles` | `ctx.roles` | `[]` |
+| `X-Tenant-Id` | `ctx.tenant_id` | `None` |
+
+`ctx.authenticated` is `True` when `actor_id != "anonymous"`.
+
+See `examples/auth_app.py` for a complete middleware implementation that
+validates API keys and Bearer tokens before injecting these headers.
+
+### AuthBackend: inline token validation
+
+Implement `AuthBackend` to validate credentials inside the framework:
+
+```python
+from agent_actions import AuthBackend, ContextResolver, AgentActionApp
+
+class ApiKeyBackend:
+    def authenticate(self, credential: str) -> dict:
+        # credential = raw "Authorization" header value
+        if not credential.startswith("ApiKey "):
+            raise PermissionError("Expected ApiKey scheme.")
+        key = credential[len("ApiKey "):]
+        identity = API_KEY_STORE.get(key)
+        if identity is None:
+            raise PermissionError("Unknown API key.")
+        actor_id, roles, tenant_id = identity
+        return {"actor_id": actor_id, "roles": roles, "tenant_id": tenant_id}
+
+resolver = ContextResolver(auth_backend=ApiKeyBackend())
+app = AgentActionApp(context_resolver=resolver)
+```
+
+Invalid credentials return HTTP 401.  No action code is reached.
+
+---
+
+## Required scopes
+
+Declare which scopes an actor must hold to reach an action:
+
+```python
+@action(
+    name="delete_invoice",
+    description="Delete an invoice",
+    risk="high",
+    approval_required=True,
+    required_scopes=["admin"],
+)
+def delete_invoice(invoice_id: str, ctx: RequestContext):
+    ...
+```
+
+Scopes are matched against `ctx.roles` using either a plain string
+(`"admin"`) or a `scope:` prefix (`"scope:admin"`).  Missing scopes are
+denied immediately and written to the audit log before any policy evaluation.
+
+---
+
+## Policies
+
+```python
+from agent_actions import (
+    AgentActionApp,
+    RoleBasedPolicy,
+    RiskBasedPolicy,
+    DenyPolicy,
+    RequireApprovalPolicy,
+)
+
+# App-level default: deny unless actor has "finance" role
+app = AgentActionApp(default_policy=RoleBasedPolicy(allowed_roles=["finance", "admin"]))
+
+# Per-action override
+@action(
+    name="view_report",
+    description="View report",
+    risk="low",
+    policy=RiskBasedPolicy(),   # high-risk → require_approval
+)
+def view_report(report_id: str, ctx):
+    ...
+```
+
+Built-in policy rules:
+
+| Class | Behaviour |
+|---|---|
+| `DefaultPolicy` | Always ALLOW |
+| `DenyPolicy` | Always DENY |
+| `RequireApprovalPolicy` | Always REQUIRE_APPROVAL |
+| `RoleBasedPolicy(allowed_roles)` | ALLOW if actor has a matching role, else DENY |
+| `RiskBasedPolicy(risk_map)` | Map action risk level to a decision |
+
+Implement `PolicyRule` protocol to plug in OPA, Casbin, or any custom engine.
+
+---
+
+## Audit logs
+
+Every invocation is written to `audit_logs`.  Sensitive field values
+(passwords, tokens, API keys, etc.) are redacted before storage.
+
+Fields captured: `action_name`, `actor_id`, `tenant_id`, `input_payload`
+(redacted), `policy_decision`, `status`, `approval_id`, `approver_id`,
+`idempotency_key`, `result`, `created_at`.
+
+```bash
+curl -s "http://localhost:8000/audit-logs?tenant_id=acme" | jq
+```
+
+Audit writes are safe under concurrent request load and preserve the correct
+per-request `actor_id` and `tenant_id`.
+
+---
+
+## Sensitive data redaction
+
+`redact_dict` is applied to all inputs before they are written to the
+audit log or stored in approval records.  The following field names are
+redacted regardless of nesting depth:
+
+`password`, `passwd`, `secret`, `token`, `api_key`, `access_token`,
+`refresh_token`, `authorization`, `client_secret`, `private_key`,
+`credential`, `ssn`, `credit_card`, `cvv`, and more.
+
+Extend `SENSITIVE_KEYS` in `redaction.py` for application-specific fields:
+
+```python
+from agent_actions.redaction import SENSITIVE_KEYS
+# SENSITIVE_KEYS is a frozenset — build a new one to extend it:
+import agent_actions.redaction as r
+r.SENSITIVE_KEYS = r.SENSITIVE_KEYS | {"my_secret_field"}
+```
+
+Raw `Authorization` header values are never stored on `RequestContext`.
+
+---
+
+## MCP integration
+
+Actions are exposed as MCP tools automatically with the same name,
+description, and JSON schema as the HTTP endpoint.  All invocations flow
+through the same runtime (policy / audit / idempotency / approval).
+
+```python
+# Assign a stable identity to MCP-originated calls:
+mcp = app.mcp_server(
+    mcp_actor_id="my-ai-agent",
+    mcp_roles=["agent", "finance"],
+    mcp_tenant_id="acme-corp",
+)
+```
+
+```bash
+mcp run examples/basic_app.py
+```
+
+MCP calls do not bypass concurrency protections. They use the same runtime,
+DB-backed idempotency handling, approval lifecycle, and audit pipeline as HTTP.
+
+---
+
+## Tests
+
+```bash
+pytest tests/ -v
+```
+
+The test suite includes threaded concurrency coverage for:
+
+- request context isolation across concurrent executions
+- idempotency races for the same key
+- approval races (`approve/approve` and `approve/reject`)
+- audit log correctness under concurrent load
+- registry safety for concurrent registration/read access
+
+---
+
+## Project structure
+
+```
+agent_actions/
+├── __init__.py        Public API
+├── decorators.py      @action decorator
+├── registry.py        ActionRegistry + ActionDef (required_scopes)
+├── context.py         RequestContext, AuthBackend, ContextResolver
+├── redaction.py       Centralized sensitive-field redaction
+├── policies.py        PolicyEngine + built-in rules
+├── runtime.py         Central ActionRuntime
+├── audit.py           AuditLogger (inputs redacted before storage)
+├── approvals.py       ApprovalService (approver_id tracked)
+├── idempotency.py     IdempotencyService (tenant-scoped)
+├── models.py          SQLAlchemy ORM models
+├── db.py              Engine + session + Django detection + resolve helper
+├── mcp.py             FastMCP integration (configurable identity)
+└── server.py          AgentActionApp + FastAPI routes
+examples/
+├── basic_app.py       3 example invoice actions
+├── auth_app.py        API key + Bearer token auth middleware pattern
+└── fastapi_advanced.py Advanced patterns (lifespan, per-tenant routing)
+tests/
+├── conftest.py
+├── test_registry.py
+├── test_policy.py
+├── test_approval.py
+└── test_idempotency.py
+```
+
+---
+
+## Architecture summary
+
+All invocations — HTTP and MCP — flow through a single `ActionRuntime`.
+The runtime validates inputs, resolves a `RequestContext` (optionally
+through an `AuthBackend`), checks required scopes, runs the `PolicyEngine`,
+handles idempotency through DB-backed claim/complete semantics, optionally
+queues an approval, executes the function (auditing errors), stores the audit
+log (with redacted inputs), and returns a structured `InvokeResult`.
+
+Transport concerns (HTTP, MCP) are fully decoupled from business logic.
+No MCP bypass exists — every tool call goes through the identical checks.
+
+The runtime is effectively stateless across requests: transient execution state
+is kept in local variables and persisted state lives in the database.
+
+---
+
+## Security model summary
+
+| Concern | How it's handled |
+|---|---|
+| Auth | `AuthBackend` protocol; default trusts `X-*` headers from middleware |
+| Anonymous access | Allowed by default; use `RoleBasedPolicy` or `required_scopes` to restrict |
+| Scope enforcement | `required_scopes` on `ActionDef`; checked before policy, audited on deny |
+| Authorization | `PolicyRule` per action or app-level default |
+| Approval safety | `pending → approved/rejected`; approver identity stored; no replay |
+| Audit completeness | Every invoke path (allow/deny/approval/error) writes an audit record |
+| Secret leakage | `redact_dict` applied to all inputs before storage; auth headers never stored |
+| Tenant isolation | `tenant_id` in all audit/approval/idempotency records; idempotency scoped per tenant |
+| MCP bypass | None — MCP calls go through identical `ActionRuntime` pipeline |
+| Concurrent duplicate execution | DB-backed idempotency ensures same-key races execute side effects once |
+| Approval race safety | Atomic DB transitions ensure only one approval outcome wins |
+| Thread safety | Per-request context, per-operation DB sessions, no shared request globals |
+| Error leakage | Execution errors audit-logged as "error"; HTTP response returns generic 500 |
+
+---
+
+## Remaining v2 improvements
+
+1. **Async runtime** — make `ActionRuntime.invoke` async; support `async def` action functions.
+2. **Webhook notifications** — fire a configurable webhook when an approval is created/resolved.
+3. **Approval expiry** — automatically reject approvals older than a configurable TTL.
+4. **Alembic migrations** — auto-generate migrations for PostgreSQL deployments.
+5. **Composite policies** — `AnyOf([...])` / `AllOf([...])` policy combinators.
+6. **Rate limiting** — per-actor rate limiting backed by Redis or SQLite.
+7. **Structured input annotations** — `Field(description=..., examples=...)` for richer MCP schemas.
+8. **Approval roles storage** — store original actor roles on the Approval row so scope checks can be re-run on resumption.
+9. **Action versioning** — `@action(name="get_invoice", version="v2")`.
+10. **CLI** — `agent-actions serve examples/basic_app.py` zero-boilerplate server.
