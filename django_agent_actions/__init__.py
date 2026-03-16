@@ -2,8 +2,6 @@
 
 __version__ = "0.2.0"
 
-default_app_config = "django_agent_actions.apps.AgentActionsConfig"
-
 from django_agent_actions.context import AuthBackend, ContextResolver, RequestContext
 from django_agent_actions.decorators import action
 from django_agent_actions.policies import (

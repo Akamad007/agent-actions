@@ -29,9 +29,9 @@ from __future__ import annotations
 import json
 
 from django.http import JsonResponse
+from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
-from django.utils.decorators import method_decorator
 
 from django_agent_actions.approvals import ApprovalAlreadyResolved, ApprovalNotFound
 from django_agent_actions.runtime import get_runtime

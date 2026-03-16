@@ -287,7 +287,6 @@ class ActionRuntime:
 # ---------------------------------------------------------------------------
 
 # Global registry — users register their actions here.
-from django_agent_actions.registry import ActionRegistry  # noqa: E402
 
 registry = ActionRegistry()
 

@@ -1,7 +1,7 @@
 """Minimal Django settings for the test suite."""
 
-import tempfile
 import os
+import tempfile
 
 SECRET_KEY = "test-secret-key-not-for-production"
 

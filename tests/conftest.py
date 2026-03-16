@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import django
 import pytest
 
 from django_agent_actions.approvals import ApprovalService
